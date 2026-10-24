@@ -18,7 +18,7 @@ updated: 2026-10-24
 | `audit_log` | `id`, `ts`, `actor` (`human:<tên>`/`agent:<id>`/`worker:<id>`/`system`), `action`, `entity`, `entity_id`, `data_json` | Chỉ thêm, không sửa, không xoá; không ghi bí mật |
 | `schema_version` | `version` | Nâng cấp CSDL theo số phiên bản |
 
-Phase 3 thêm: `approvals` (yêu cầu phê duyệt công cụ/chi phí), `budgets` (hạn mức theo công ty/dự án/agent).
+Phase 3 (CSDL v2) thêm: `budgets`, `approvals`, `task_grants` (xem `07-ngan-sach-phe-duyet.md`) và trạng thái task `needs_approval`. Nâng cấp từ v1 dựng lại bảng `tasks` (SQLite không sửa được CHECK), giữ nguyên dữ liệu, kiểm `foreign_key_check` trước khi chốt.
 
 ## Quy tắc
 - Thời gian lưu dạng ISO 8601 UTC.

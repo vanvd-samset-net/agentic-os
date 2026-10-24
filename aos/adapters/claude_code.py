@@ -44,12 +44,14 @@ def _find_exe(configured=""):
     raise FileNotFoundError("Không thấy claude CLI. Cài Claude Code (native) hoặc đặt agents.<id>.claude.command.")
 
 
-def build_command(cfg, exe):
+def build_command(cfg, exe, allowed=(), off=(), max_budget_usd=None):
     cmd = [*exe, "-p", "--output-format", "json", "--permission-mode", cfg.get("permission_mode", "dontAsk")]
-    if cfg.get("allowed_tools"):
-        cmd += ["--allowedTools", ",".join(cfg["allowed_tools"])]
-    if cfg.get("disallowed_tools"):
-        cmd += ["--disallowedTools", ",".join(cfg["disallowed_tools"])]
+    if allowed:
+        cmd += ["--allowedTools", ",".join(allowed)]
+    if off:
+        cmd += ["--disallowedTools", ",".join(off)]
+    if max_budget_usd is not None:
+        cmd += ["--max-budget-usd", f"{max(0.01, max_budget_usd):.4f}"]
     if cfg.get("max_turns"):
         cmd += ["--max-turns", str(int(cfg["max_turns"]))]
     if cfg.get("model"):
@@ -104,14 +106,15 @@ def run(ctx):
     env = dict(ctx.env)
     env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")  # không tự cập nhật/telemetry giữa lúc chạy
     ctx.env = env
-    code, state = run_process(build_command(cfg, exe), ctx, stdin_text=ctx.prompt)
+    code, state = run_process(build_command(cfg, exe, ctx.allowed_tools, ctx.off_tools, ctx.max_budget_usd), ctx,
+                              stdin_text=ctx.prompt)
     stdout = read_log(ctx, "stdout.log", limit=5_000_000)
     res = parse_json_result(stdout) or {}
     if res:
         (ctx.log_dir / "result.json").write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
     usage = usage_from(res) if res else {}
     denials = res.get("permission_denials") or []
-    common = {"usage": usage, "session_id": res.get("session_id"), "denials": denials}
+    common = {"usage": usage, "session_id": res.get("session_id"), "denials": denials, "subtype": res.get("subtype")}
     if state != "ok":
         return AdapterResult(code, state, error=f"Agent bị dừng: {state}", **common)
     text = res.get("result") or ""

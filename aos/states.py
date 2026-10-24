@@ -11,12 +11,16 @@ TRANSITIONS = {
     ("running", "blocked"): {"worker"},
     ("running", "assigned"): {"worker", "system"},
     ("running", "failed"): {"worker", "system"},
+    ("running", "needs_approval"): {"worker"},
+    ("needs_approval", "assigned"): {"human"},
+    ("needs_approval", "under_review"): {"human"},
+    ("needs_approval", "failed"): {"human"},
     ("under_review", "done"): {"human"},
     ("under_review", "assigned"): {"human"},
     ("blocked", "assigned"): {"human"},
     ("failed", "assigned"): {"human"},
 }
-for _s in ("backlog", "assigned", "running", "under_review", "failed", "blocked"):
+for _s in ("backlog", "assigned", "running", "needs_approval", "under_review", "failed", "blocked"):
     TRANSITIONS[(_s, "cancelled")] = {"human"}
 
 

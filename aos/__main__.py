@@ -4,7 +4,7 @@ import getpass
 import json
 import sys
 
-from . import config, db, store, worker
+from . import budgets, config, db, store, worker
 
 for _s in (sys.stdout, sys.stderr):
     if hasattr(_s, "reconfigure"):
@@ -60,6 +60,22 @@ def main(argv=None):
     w.add_argument("--agent", required=True), w.add_argument("--once", action="store_true")
     w.add_argument("--poll", type=int, default=30), w.add_argument("--id", default=None)
     sub.add_parser("recover", help="thu hồi task có khoá hết hạn")
+    b = sub.add_parser("budget", help="ngân sách: set | list")
+    bsub = b.add_subparsers(dest="bcmd", required=True)
+    bs = bsub.add_parser("set", help="đặt hạn mức")
+    bs.add_argument("--scope", required=True, choices=budgets.SCOPES), bs.add_argument("--id", default="")
+    bs.add_argument("--usd", type=float), bs.add_argument("--tokens", type=int)
+    bs.add_argument("--period", default="total", choices=["total", "month"]), bs.add_argument("--warn", type=float, default=0.8)
+    bsub.add_parser("list", help="hạn mức, đã dùng, %")
+    ap_ = sub.add_parser("approvals", help="yêu cầu phê duyệt đang chờ")
+    ap_.add_argument("--all", action="store_true")
+    ok = sub.add_parser("approve", help="duyệt yêu cầu")
+    ok.add_argument("id", type=int), ok.add_argument("--note", default="")
+    ok.add_argument("--raise-usd", type=float), ok.add_argument("--raise-tokens", type=int)
+    no = sub.add_parser("deny", help="từ chối yêu cầu")
+    no.add_argument("id", type=int), no.add_argument("--note", required=True)
+    ag = sub.add_parser("agent", help="agent: resume (bật lại agent bị tự dừng)")
+    ag.add_argument("action", choices=["resume", "pause"]), ag.add_argument("id")
     sub.add_parser("status", help="tổng quan: số task theo trạng thái, token/chi phí theo agent")
     args = ap.parse_args(argv)
 
@@ -113,6 +129,29 @@ def main(argv=None):
         elif args.cmd == "worker":
             worker.loop(con, args.agent, args.id or worker.default_worker_id(), config.CONFIG.parent.parent,
                         poll=args.poll, once=args.once)
+        elif args.cmd == "budget" and args.bcmd == "set":
+            budgets.set_budget(con, args.scope, args.id, args.usd, args.tokens, args.period, args.warn, actor=human())
+            print("Đã đặt ngân sách.")
+        elif args.cmd == "budget":
+            rows = [{**r, "scope": budgets.label(r), "usd": f"{r['spent_usd']:.2f}/{r['limit_usd'] if r['limit_usd'] is not None else '-'}",
+                     "tokens": f"{r['spent_tokens']:,}/{r['limit_tokens'] if r['limit_tokens'] is not None else '-'}",
+                     "used": f"{r['ratio']:.0%}"} for r in budgets.list_all(con)]
+            table(rows, ["id", "scope", "usd", "tokens", "used"])
+        elif args.cmd == "approvals":
+            rows = [{**a, "reason": a["request"].get("reason", "")[:120]} for a in store.list_approvals(con, not args.all)]
+            table(rows, ["id", "task_id", "kind", "status", "reason"])
+        elif args.cmd in ("approve", "deny"):
+            target = store.decide(con, args.id, args.cmd == "approve", args.note, actor=human(),
+                                  raise_usd=getattr(args, "raise_usd", None), raise_tokens=getattr(args, "raise_tokens", None))
+            print(f"Yêu cầu #{args.id}: {'đã duyệt' if args.cmd == 'approve' else 'đã từ chối'} → task {target}")
+        elif args.cmd == "agent":
+            if args.action == "resume":
+                store.resume_agent(con, args.id, actor=human())
+            else:
+                agent = store.get_agent(con, args.id)
+                store.upsert_agent(con, args.id, agent["name"], agent["adapter"], agent["role"], agent["reports_to"],
+                                   agent["config"], status="paused", actor=human())
+            print(f"Agent {args.id}: {store.get_agent(con, args.id)['status']}")
         elif args.cmd == "recover":
             print(store.recover(con, actor=human()) or "Không có task nào hết hạn khoá.")
         elif args.cmd == "status":
@@ -121,7 +160,7 @@ def main(argv=None):
             print()
             table(store.usage_summary(con), ["agent_id", "runs", "input_tokens", "output_tokens", "cache_read_tokens",
                                              "cache_write_tokens", "cost_usd"])
-    except (store.NotFound, ValueError, KeyError, config.ConfigError) as e:
+    except (store.NotFound, LookupError, ValueError, KeyError, config.ConfigError) as e:
         print(f"Lỗi: {e}", file=sys.stderr)
         return 1
     finally:

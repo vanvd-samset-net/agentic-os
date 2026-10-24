@@ -43,15 +43,17 @@ def org_id(con):
 
 
 def upsert_agent(con, agent_id, name, adapter, role="", reports_to=None, config=None, status="active", actor="system"):
+    """status=None: agent mới là active, agent cũ giữ nguyên trạng thái (vd đã tự tạm dừng vì hết ngân sách)."""
     oid = org_id(con)
     with Tx(con):
         con.execute(
             """INSERT INTO agents (id, org_id, name, role, reports_to, adapter, config_json, status, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET name = excluded.name, role = excluded.role, reports_to = excluded.reports_to,
-                 adapter = excluded.adapter, config_json = excluded.config_json, status = excluded.status,
-                 updated_at = excluded.updated_at""",
-            (agent_id, oid, name, role, reports_to, adapter, json.dumps(config or {}, ensure_ascii=False), status, now()),
+                 adapter = excluded.adapter, config_json = excluded.config_json,
+                 status = CASE WHEN ? IS NULL THEN agents.status ELSE excluded.status END, updated_at = excluded.updated_at""",
+            (agent_id, oid, name, role, reports_to, adapter, json.dumps(config or {}, ensure_ascii=False), status or "active",
+             now(), status),
         )
         audit(con, actor, "agent.upsert", "agent", agent_id, {"adapter": adapter, "status": status})
 
@@ -220,8 +222,10 @@ def heartbeat(con, task_id, worker_id, lease=LEASE_SECONDS):
 
 
 def finish(con, task_id, run_id, worker_id, outcome, summary="", usage=None, exit_code=None, session_id=None,
-           log_dir=None, error=None, blocked_reason=None):
-    """Kết thúc lần chạy. outcome: succeeded | blocked | failed | timeout | cancelled."""
+           log_dir=None, error=None, blocked_reason=None, approval=None, refund_attempt=False):
+    """Kết thúc lần chạy. outcome: succeeded | blocked | failed | timeout | cancelled.
+    approval=(kind, request) → task chuyển needs_approval và tạo yêu cầu phê duyệt (Phase 3);
+    refund_attempt: không tính lượt thử (lần chạy bị chặn trước khi agent chạy)."""
     actor = f"worker:{worker_id}"
     u = usage or {}
     with Tx(con):
@@ -237,7 +241,17 @@ def finish(con, task_id, run_id, worker_id, outcome, summary="", usage=None, exi
             audit(con, actor, "run.orphan", "run", run_id, {"task_status": task["status"]})
             return task["status"]  # đã bị huỷ/thu hồi trong lúc chạy: không ghi đè
         common = {"lock_owner": None, "lock_until": None}
-        if outcome == "succeeded":
+        if refund_attempt:
+            common["attempts"] = max(0, task["attempts"] - 1)
+        if approval:
+            kind, request = approval
+            target = "needs_approval"
+            _set_status(con, task, target, actor, result_summary=(summary or error or "")[:4000], **common)
+            aid = con.execute("INSERT INTO approvals (task_id, run_id, kind, request_json, requested_at) VALUES (?, ?, ?, ?, ?)",
+                              (task_id, run_id, kind, json.dumps({**request, "run_outcome": outcome}, ensure_ascii=False),
+                               now())).lastrowid
+            audit(con, actor, "approval.request", "approval", aid, {"task": task_id, "kind": kind})
+        elif outcome == "succeeded":
             target = "under_review"
             _set_status(con, task, target, actor, result_summary=summary[:4000], **common)
         elif outcome == "blocked":
@@ -266,6 +280,75 @@ def recover(con, actor="system"):
             _set_status(con, task, target, actor, lock_owner=None, lock_until=None)
             out.append((task["id"], target))
     return out
+
+
+# ------------------------------------------------------------------ phê duyệt (Phase 3)
+
+def get_approval(con, approval_id):
+    row = con.execute("SELECT * FROM approvals WHERE id = ?", (approval_id,)).fetchone()
+    if not row:
+        raise NotFound(f"Không có yêu cầu phê duyệt #{approval_id}")
+    a = dict(row)
+    a["request"] = json.loads(a.pop("request_json") or "{}")
+    return a
+
+
+def list_approvals(con, pending_only=True):
+    sql = "SELECT a.*, t.title FROM approvals a JOIN tasks t ON t.id = a.task_id"
+    rows = con.execute(sql + (" WHERE a.status = 'pending'" if pending_only else "") + " ORDER BY a.id").fetchall()
+    out = []
+    for r in rows:
+        a = dict(r)
+        a["request"] = json.loads(a.pop("request_json") or "{}")
+        out.append(a)
+    return out
+
+
+def grants(con, task_id):
+    return [r["rule"] for r in con.execute("SELECT rule FROM task_grants WHERE task_id = ? ORDER BY rule", (task_id,))]
+
+
+def decide(con, approval_id, approve, note="", actor="human:cli", raise_usd=None, raise_tokens=None):
+    """Duyệt / từ chối. Duyệt budget: tăng hạn mức (nếu có) rồi phải hết bị vượt; duyệt tool: cấp luật cho riêng task."""
+    from . import budgets  # tránh vòng import
+    a = get_approval(con, approval_id)
+    if a["status"] != "pending":
+        raise ValueError(f"Yêu cầu #{approval_id} đã {a['status']}")
+    task = get_task(con, a["task_id"])
+    if approve and a["kind"] == "budget":
+        for bid in a["request"].get("budget_ids", []):
+            if raise_usd or raise_tokens:
+                budgets.raise_limit(con, bid, raise_usd, raise_tokens, actor=actor)
+        still, _ = budgets.check(con, task)
+        if still:
+            raise ValueError("Vẫn hết ngân sách: " + ", ".join(budgets.label(b) for b in still)
+                             + ". Duyệt kèm --raise-usd / --raise-tokens hoặc `aos budget set`.")
+    with Tx(con):
+        task = get_task(con, a["task_id"])
+        con.execute("UPDATE approvals SET status = ?, decided_at = ?, decided_by = ?, decision_note = ? WHERE id = ?",
+                    ("approved" if approve else "denied", now(), actor, note, approval_id))
+        audit(con, actor, "approval.approve" if approve else "approval.deny", "approval", approval_id,
+              {"task": task["id"], "kind": a["kind"]})
+        if approve:
+            for rule in a["request"].get("rules", []) if a["kind"] == "tool" else []:
+                con.execute("INSERT OR IGNORE INTO task_grants (task_id, rule, approval_id, granted_by, granted_at) "
+                            "VALUES (?, ?, ?, ?, ?)", (task["id"], rule, approval_id, actor, now()))
+            target = "assigned"
+        else:
+            target = "under_review" if a["request"].get("run_outcome") == "succeeded" and a["kind"] == "tool" else "failed"
+        if task["status"] == "needs_approval":
+            _set_status(con, task, target, actor)
+        if note.strip():
+            con.execute("INSERT INTO task_comments (task_id, author, kind, body, created_at) VALUES (?, ?, ?, ?, ?)",
+                        (task["id"], actor, "feedback" if approve else "note", note, now()))
+    return target
+
+
+def resume_agent(con, agent_id, actor="human:cli"):
+    get_agent(con, agent_id)
+    with Tx(con):
+        con.execute("UPDATE agents SET status = 'active', updated_at = ? WHERE id = ?", (now(), agent_id))
+        audit(con, actor, "agent.resume", "agent", agent_id)
 
 
 # ------------------------------------------------------------------ đọc

@@ -32,14 +32,18 @@ command = ""                    # để trống: tự tìm (PATH → ~/.local/bi
 permission_mode = "dontAsk"     # cấm bypassPermissions
 max_turns = 400
 model = ""
-# Chỉ những gì b3b4 cần. Ngoài danh sách này Claude Code tự từ chối (ghi vào permission_denials).
-allowed_tools = [
+
+# Cổng công cụ 3 mức (docs/07). allowed: tự chạy; ask: bị từ chối lần đầu → yêu cầu phê duyệt, duyệt rồi task có quyền;
+# off: cấm hẳn. Thao tác ngoài cả 3 danh sách: Claude Code tự từ chối, chỉ ghi vào permission_denials.json.
+[agents.b3b4.tools]
+allowed = [
   "Read", "Write", "Edit", "Glob", "Grep",
   "Bash(python *)", "Bash(python3 *)", "Bash(bash projects/*)", "Bash(node *)", "Bash(npm *)",
   "Bash(docker compose *)", "Bash(docker info *)", "Bash(docker desktop start *)",
   "Bash(git status *)", "Bash(git diff *)", "Bash(ls *)", "Bash(cat *)", "Bash(grep *)", "Bash(curl -s http://localhost:*)",
 ]
-disallowed_tools = ["Bash(git push *)", "Bash(rm -rf *)", "WebFetch"]
+ask = ["Bash(git commit *)", "WebFetch", "WebSearch", "Bash(npm install *)"]
+off = ["Bash(git push *)", "Bash(rm -rf *)"]
 
 [agents.echo]
 name = "Echo (kiểm tra hệ thống)"

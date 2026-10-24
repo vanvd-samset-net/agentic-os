@@ -24,6 +24,9 @@ class RunContext:
     timeout_s: int
     heartbeat: callable    # () -> bool; False = mất khoá → dừng agent
     heartbeat_every: int = 30
+    allowed_tools: list = field(default_factory=list)   # cổng công cụ đã tính (allowed + quyền được duyệt cho task)
+    off_tools: list = field(default_factory=list)
+    max_budget_usd: float | None = None                  # USD còn lại nhỏ nhất của các ngân sách áp cho task
 
 
 @dataclass
@@ -35,6 +38,7 @@ class AdapterResult:
     session_id: str | None = None
     error: str | None = None
     denials: list = field(default_factory=list)
+    subtype: str | None = None
 
 
 def kill_tree(proc):

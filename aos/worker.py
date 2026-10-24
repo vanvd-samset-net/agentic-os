@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import adapters, db, secrets, store, workspace
+from . import adapters, budgets, db, secrets, store, tools, workspace
 from .adapters.base import AdapterResult, RunContext
 
 DEFAULT_TEMPLATE = """# Việc được giao (agentic-os)
@@ -102,6 +102,15 @@ def run_once(con, agent_id, worker_id, base_dir, heartbeat_every=30):
     ctx_data = store.context_chain(con, task["id"])
     project = ctx_data["project"]
     secret_values = {}
+    actor = f"worker:{worker_id}"
+    exceeded, remaining_usd = budgets.check(con, task)
+    if exceeded:  # 1) trước khi chạy: hết ngân sách → không chạy agent, chờ duyệt, không tính lượt
+        reason = "Hết ngân sách: " + "; ".join(budget_text(b) for b in exceeded)
+        target = store.finish(con, task["id"], run_id, worker_id, "cancelled", error=reason, log_dir=str(log_dir),
+                              approval=("budget", {"reason": reason, "budget_ids": [b["id"] for b in exceeded]}),
+                              refund_attempt=True)
+        return task["id"], target
+    allowed, ask, off = tools.policy(cfg, store.grants(con, task["id"]))
     try:
         workdir = workspace.prepare(cfg, task)
         secret_values = secrets.load_for(agent_id, cfg.get("secrets") or [])
@@ -110,7 +119,8 @@ def run_once(con, agent_id, worker_id, base_dir, heartbeat_every=30):
         (log_dir / "prompt.md").write_text(prompt, encoding="utf-8")
         ctx = RunContext(task=task, project=project, agent=agent, prompt=prompt, workdir=Path(workdir), env=env,
                          log_dir=log_dir, timeout_s=int(cfg.get("timeout_s") or int(cfg.get("timeout_min", 60)) * 60),
-                         heartbeat=lambda: store.heartbeat(con, task["id"], worker_id), heartbeat_every=heartbeat_every)
+                         heartbeat=lambda: store.heartbeat(con, task["id"], worker_id), heartbeat_every=heartbeat_every,
+                         allowed_tools=allowed, off_tools=off, max_budget_usd=remaining_usd)
         result = adapters.REGISTRY[agent["adapter"]](ctx)
         result = apply_handoff(cfg, workdir, task, project, started, result)
     except Exception as e:  # noqa: BLE001 - lỗi chuẩn bị (thiếu bí mật, thư mục...) → lần chạy thất bại, không treo task
@@ -122,11 +132,26 @@ def run_once(con, agent_id, worker_id, base_dir, heartbeat_every=30):
     summary = secrets.redact(result.summary or "", secret_values)
     if result.denials:
         summary = (summary + f"\n[{len(result.denials)} thao tác bị từ chối quyền: xem {log_dir.name}/permission_denials.json]").strip()
+    approval = None
+    if result.subtype == "error_max_budget_usd":  # 2) trong khi chạy: Claude Code tự dừng ở --max-budget-usd
+        b_ids = [b["id"] for b in budgets.applicable(con, task) if b["limit_usd"] is not None]
+        approval = ("budget", {"reason": f"Chạm ngân sách trong lúc chạy (còn ${remaining_usd or 0:.2f})", "budget_ids": b_ids})
+    else:
+        rules, calls = tools.ask_hits(result.denials, ask)
+        if rules:  # thao tác thuộc nhóm "cần duyệt" bị từ chối → xin phép, chạy lại với quyền được cấp
+            approval = ("tool", {"reason": "Agent cần quyền: " + ", ".join(rules), "rules": rules, "calls": calls[:20]})
     target = store.finish(con, task["id"], run_id, worker_id, result.outcome, summary=summary, usage=result.usage,
                           exit_code=result.exit_code, session_id=result.session_id, log_dir=str(log_dir),
                           error=secrets.redact(result.error or "", secret_values) or None,
-                          blocked_reason=summary if result.outcome == "blocked" else None)
+                          blocked_reason=summary if result.outcome == "blocked" else None, approval=approval)
+    budgets.after_run(con, store.get_task(con, task["id"]), actor)  # 3) sau khi chạy: cảnh báo, tự tạm dừng agent
     return task["id"], target
+
+
+def budget_text(b):
+    usd = f"${b['spent_usd']:.2f}/{b['limit_usd']}" if b["limit_usd"] is not None else f"${b['spent_usd']:.2f}"
+    tok = f"{b['spent_tokens']:,}/{b['limit_tokens']:,} token" if b["limit_tokens"] is not None else f"{b['spent_tokens']:,} token"
+    return f"{budgets.label(b)}: {usd} USD, {tok}"
 
 
 def loop(con, agent_id, worker_id, base_dir, poll=30, once=False, log=print):

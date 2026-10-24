@@ -50,5 +50,5 @@ def sync(con, cfg, actor="system"):
     store.ensure_org(con, org.get("name", "Công ty"), org.get("mission", ""), actor=actor)
     for aid, a in cfg["agents"].items():
         store.upsert_agent(con, aid, a.get("name", aid), a["adapter"], role=a.get("role", ""),
-                           reports_to=a.get("reports_to"), config=a, status=a.get("status", "active"), actor=actor)
+                           reports_to=a.get("reports_to"), config=a, status=a.get("status"), actor=actor)
     return sorted(cfg["agents"])

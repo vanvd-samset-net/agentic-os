@@ -62,6 +62,42 @@ SCHEMA = [
     CREATE TRIGGER audit_no_update BEFORE UPDATE ON audit_log BEGIN SELECT RAISE(ABORT, 'audit_log chỉ được thêm'); END;
     CREATE TRIGGER audit_no_delete BEFORE DELETE ON audit_log BEGIN SELECT RAISE(ABORT, 'audit_log chỉ được thêm'); END;
     """,
+    # v2 (Phase 3): trạng thái needs_approval; ngân sách; phê duyệt; quyền công cụ cấp theo task.
+    # SQLite không sửa được CHECK tại chỗ → dựng lại bảng tasks, giữ nguyên dữ liệu và id.
+    """
+    CREATE TABLE tasks_v2 (
+        id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects(id), parent_id INTEGER REFERENCES tasks(id),
+        title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', agent_id TEXT REFERENCES agents(id),
+        status TEXT NOT NULL DEFAULT 'backlog' CHECK (status IN
+            ('backlog', 'assigned', 'running', 'needs_approval', 'under_review', 'done', 'failed', 'blocked', 'cancelled')),
+        priority INTEGER NOT NULL DEFAULT 2, attempts INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL DEFAULT 2,
+        lock_owner TEXT, lock_until TEXT, blocked_reason TEXT, result_summary TEXT,
+        created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    INSERT INTO tasks_v2 SELECT id, project_id, parent_id, title, description, agent_id, status, priority, attempts,
+        max_attempts, lock_owner, lock_until, blocked_reason, result_summary, created_by, created_at, updated_at FROM tasks;
+    DROP TABLE tasks;
+    ALTER TABLE tasks_v2 RENAME TO tasks;
+    CREATE INDEX tasks_queue ON tasks (agent_id, status, priority, id);
+    CREATE TABLE budgets (
+        id INTEGER PRIMARY KEY, scope TEXT NOT NULL CHECK (scope IN ('org', 'project', 'agent', 'task')),
+        scope_id TEXT NOT NULL DEFAULT '', period TEXT NOT NULL DEFAULT 'total' CHECK (period IN ('total', 'month')),
+        limit_usd REAL, limit_tokens INTEGER, warn_ratio REAL NOT NULL DEFAULT 0.8,
+        warned_key TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (scope, scope_id, period)
+    );
+    CREATE TABLE approvals (
+        id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id), run_id INTEGER REFERENCES runs(id),
+        kind TEXT NOT NULL CHECK (kind IN ('budget', 'tool')),
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'denied')),
+        request_json TEXT NOT NULL DEFAULT '{}', requested_at TEXT NOT NULL, decided_at TEXT, decided_by TEXT,
+        decision_note TEXT
+    );
+    CREATE INDEX approvals_pending ON approvals (status, task_id);
+    CREATE TABLE task_grants (
+        task_id INTEGER NOT NULL REFERENCES tasks(id), rule TEXT NOT NULL, approval_id INTEGER REFERENCES approvals(id),
+        granted_by TEXT NOT NULL, granted_at TEXT NOT NULL, PRIMARY KEY (task_id, rule)
+    );
+    """,
 ]
 
 
@@ -90,17 +126,27 @@ def migrate(con):
     con.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
     row = con.execute("SELECT version FROM schema_version").fetchone()
     version = row["version"] if row else 0
-    for i, script in enumerate(SCHEMA[version:], start=version + 1):
-        con.execute("BEGIN IMMEDIATE")
-        try:
-            for stmt in split_sql(script):
-                con.execute(stmt)
-            con.execute("DELETE FROM schema_version")
-            con.execute("INSERT INTO schema_version (version) VALUES (?)", (i,))
-            con.execute("COMMIT")
-        except Exception:
-            con.execute("ROLLBACK")
-            raise
+    if version >= len(SCHEMA):
+        return
+    # Dựng lại bảng cần tắt khoá ngoại (chỉ đổi được ngoài giao dịch); kiểm lại toàn vẹn trước khi COMMIT.
+    con.execute("PRAGMA foreign_keys = OFF")
+    try:
+        for i, script in enumerate(SCHEMA[version:], start=version + 1):
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                for stmt in split_sql(script):
+                    con.execute(stmt)
+                bad = con.execute("PRAGMA foreign_key_check").fetchall()
+                if bad:
+                    raise sqlite3.IntegrityError(f"Nâng cấp CSDL v{i} làm hỏng khoá ngoại: {len(bad)} dòng")
+                con.execute("DELETE FROM schema_version")
+                con.execute("INSERT INTO schema_version (version) VALUES (?)", (i,))
+                con.execute("COMMIT")
+            except Exception:
+                con.execute("ROLLBACK")
+                raise
+    finally:
+        con.execute("PRAGMA foreign_keys = ON")
 
 
 def split_sql(script):

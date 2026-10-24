@@ -31,4 +31,12 @@ mọi trạng thái chưa kết thúc ──cancel──► cancelled
 | `blocked`, `failed` | `assigned` | người | đã xử lý việc chặn / cho thử lại (đặt lại `attempts`) |
 | chưa kết thúc | `cancelled` | người | huỷ |
 
-Trạng thái kết thúc: `done`, `cancelled`. Phase 3 thêm `needs_approval` (giữa `running` và `under_review` khi agent cần quyền nguy hiểm hoặc vượt ngân sách).
+Trạng thái kết thúc: `done`, `cancelled`.
+
+## Phase 3: `needs_approval`
+| Từ | Đến | Ai | Điều kiện |
+|---|---|---|---|
+| `running` | `needs_approval` | worker | hết ngân sách (trước khi chạy, không tính lượt) / Claude Code dừng ở `--max-budget-usd` / thao tác thuộc nhóm `ask` bị từ chối |
+| `needs_approval` | `assigned` | người | duyệt (ngân sách: phải nâng hạn mức cho hết vượt; công cụ: luật được cấp cho riêng task) |
+| `needs_approval` | `under_review` | người | từ chối quyền công cụ khi lần chạy trước đã xong |
+| `needs_approval` | `failed` | người | từ chối (ngân sách, hoặc lần chạy trước chưa xong) |
