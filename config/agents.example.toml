@@ -40,7 +40,8 @@ allowed = [
   "Read", "Write", "Edit", "Glob", "Grep",
   "Bash(python *)", "Bash(python3 *)", "Bash(bash projects/*)", "Bash(node *)", "Bash(npm *)",
   "Bash(docker compose *)", "Bash(docker info *)", "Bash(docker desktop start *)",
-  "Bash(git status *)", "Bash(git diff *)", "Bash(ls *)", "Bash(cat *)", "Bash(grep *)", "Bash(curl -s http://localhost:*)",
+  "Bash(git status *)", "Bash(git diff *)", "Bash(ls *)", "Bash(cat *)", "Bash(grep *)", "Bash(head *)", "Bash(echo *)",
+  "Bash(curl -s http://localhost:*)",
 ]
 ask = ["Bash(git commit *)", "WebFetch", "WebSearch", "Bash(npm install *)"]
 off = ["Bash(git push *)", "Bash(rm -rf *)"]

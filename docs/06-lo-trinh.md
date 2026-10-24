@@ -12,6 +12,14 @@ updated: 2026-10-24
 | 3 | Quản trị và ngân sách (`docs/07`): `budgets` (công ty/dự án/agent/task, token + USD, tổng hoặc theo tháng), chặn trước/trong (`--max-budget-usd`)/sau khi chạy, cảnh báo ngưỡng, tự `pause` agent; `approvals` + `needs_approval`; cổng công cụ allowed/ask/off, quyền cấp theo task; CSDL v2 (nâng cấp giữ dữ liệu) | **Xong (2026-10-24)** | `tests/test_phase3.py` 11/11. Còn lại: dọn worktree khi `done` |
 | 4 | Giao việc giữa agent: agent ghi `handoff` có `next_tasks` → tạo task con cho agent kế (B3B4 → B5 → B6) kèm đường dẫn sản phẩm; lịch định kỳ (cron) và đánh thức theo sự kiện thay cho chờ `poll`; giao diện web (tận dụng bảng điều khiển của b3b4) | Chưa | Pipeline B3B4 → B5 chạy nối tiếp không cần người tạo task tay |
 
-## Việc nên làm ngay trước Phase 3
-- Chạy thử một task b3b4 thật qua agentic-os trên một dự án nhỏ, xem `permission_denials` để chỉnh `allowed_tools` cho vừa.
+## Chạy thử thật với b3b4 (2026-10-24, dự án `aos-thu-nghiem`, chỉ bước 1–2, ngân sách task 3 USD)
+| Lần | Kết quả | Chi phí | Ghi chú |
+|---|---|---|---|
+| 1 | `blocked` sau ~2 phút | 0,68 USD | 1 lệnh nối `echo … && ls …` bị từ chối (`echo` chưa được phép); agent tưởng Bash bị cấm hẳn nên bỏ luôn script |
+| 2 (sau `aos reopen` + góp ý) | `under_review` sau ~6 phút, 71 lượt | 1,83 USD | Cổng bước 1, 2 đạt; `validate_design` 0 lỗi; 0 thao tác bị từ chối; cảnh báo ngân sách 84% tự bật |
+
+Sửa sau lần 1: adapter báo cho agent danh sách quyền + dặn dùng lệnh đơn (`tools_note`); thêm `Bash(echo *)`.
+
+## Việc tiếp theo
 - Cài Claude Code bản native (đường dẫn ổn định) thay cho bản đi kèm VS Code.
+- Phase 4: giao việc giữa agent, lịch định kỳ, giao diện.

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1 (2026-10-24)
+
+- Chạy thử thật b3b4 qua agentic-os (bước 1–2): lần 1 bị chặn vì agent không biết quyền của mình; sửa: adapter claude-code báo danh sách quyền và dặn dùng lệnh đơn; lần 2 xong, 1,83 USD, 0 thao tác bị từ chối.
+- Thêm `config/prompts/b3b4-buoc12.md` (chỉ làm bước 1–2), `Bash(echo *)` vào quyền mẫu của b3b4.
+
 ## 0.2.0 (2026-10-24)
 
 - Phase 3: ngân sách token/USD theo công ty, dự án, agent, task (tổng hoặc theo tháng); chặn trước khi chạy (không tính lượt), trong khi chạy (`--max-budget-usd`), sau khi chạy (cảnh báo ngưỡng một lần mỗi kỳ, hết ngân sách agent → tự tạm dừng).

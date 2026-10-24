@@ -163,6 +163,9 @@ class ClaudeAdapterTest(WorkerBase):
         a = argv["args"]
         self.assertEqual(a[a.index("--permission-mode") + 1], "dontAsk")
         self.assertEqual(a[a.index("--allowedTools") + 1], "Read,Bash(git status *)")
+        note = a[a.index("--append-system-prompt") + 1]
+        self.assertIn("được phép: Read, Bash(git status *)", note)   # agent biết quyền của mình
+        self.assertIn("lệnh đơn", note)
         self.assertTrue((Path(run["log_dir"]) / "permission_denials.json").exists())
         self.assertIn("bị từ chối quyền", store.get_task(self.con, tid)["result_summary"] or
                       self.con.execute("SELECT body FROM task_comments WHERE kind='agent'").fetchone()[0])

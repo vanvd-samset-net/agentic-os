@@ -56,8 +56,25 @@ def build_command(cfg, exe, allowed=(), off=(), max_budget_usd=None):
         cmd += ["--max-turns", str(int(cfg["max_turns"]))]
     if cfg.get("model"):
         cmd += ["--model", cfg["model"]]
-    cmd += ["--append-system-prompt", SYSTEM_NOTE + (" " + cfg["append_system_prompt"] if cfg.get("append_system_prompt") else "")]
+    cmd += ["--append-system-prompt", SYSTEM_NOTE + tools_note(allowed, off)
+            + (" " + cfg["append_system_prompt"] if cfg.get("append_system_prompt") else "")]
     return cmd + list(cfg.get("extra_args") or [])
+
+
+def tools_note(allowed, off):
+    """Cho agent biết quyền của nó. Lần chạy thử đầu (2026-10-24): một lệnh nối `echo … && ls …` bị từ chối,
+    agent tưởng Bash bị cấm hẳn và bỏ luôn các lệnh được phép."""
+    if not allowed and not off:
+        return ""
+    parts = [" Quyền công cụ của bạn trong lần chạy này:"]
+    if allowed:
+        parts.append(" được phép: " + ", ".join(allowed) + ".")
+    if off:
+        parts.append(" cấm: " + ", ".join(off) + ".")
+    parts.append(" Mỗi lệnh Bash là một lệnh đơn khớp danh sách (Claude Code tách lệnh nối bằng && ; | và kiểm từng phần);"
+                 " một lệnh bị từ chối không có nghĩa mọi lệnh Bash bị cấm, hãy thử lệnh đơn được phép."
+                 " Thao tác ngoài danh sách sẽ bị từ chối và được ghi lại để người quản lý cấp quyền nếu cần.")
+    return "".join(parts)
 
 
 def parse_json_result(stdout):
