@@ -1,0 +1,50 @@
+# Sơ đồ tổ chức + cấu hình agent. Chép thành config/agents.toml (đã .gitignore) rồi sửa đường dẫn.
+# Bí mật KHÔNG để ở đây: config/secrets/<agent>.env, chỉ khai tên biến trong `secrets = [...]`.
+
+[org]
+name = "Samset — xưởng làm website"
+mission = "Giao website WordPress đúng SRS, dựng lại được bằng script, bảo mật là ưu tiên số một."
+
+[agents.b3b4]
+name = "WP Agent (B3+B4)"
+role = "Thiết kế hệ thống + lập trình WordPress"
+reports_to = "leader"
+adapter = "claude-code"
+workdir = "D:/Documents/Dev/b3b4-wordpress-agent"
+workspace = "shared"            # chạy trong thư mục agent; mỗi dự án tối đa 1 task chạy cùng lúc
+prompt_file = "config/prompts/b3b4.md"
+timeout_min = 300
+secrets = []                    # ví dụ ["ANTHROPIC_API_KEY"] nếu không dùng đăng nhập của máy
+
+[agents.b3b4.env]
+WP_AGENT_PROJECT = "{project_slug}"
+
+[agents.b3b4.handoff]           # hợp đồng đầu ra: b3b4 ghi trạng thái cuối vào handoff.json
+file = "projects/{project_slug}/output/handoff.json"
+status_key = "status"
+reason_key = "reason"
+done = ["done"]
+blocked = ["blocked"]
+failed = ["failed"]
+
+[agents.b3b4.claude]
+command = ""                    # để trống: tự tìm (PATH → ~/.local/bin → bản đi kèm VS Code)
+permission_mode = "dontAsk"     # cấm bypassPermissions
+max_turns = 400
+model = ""
+# Chỉ những gì b3b4 cần. Ngoài danh sách này Claude Code tự từ chối (ghi vào permission_denials).
+allowed_tools = [
+  "Read", "Write", "Edit", "Glob", "Grep",
+  "Bash(python *)", "Bash(python3 *)", "Bash(bash projects/*)", "Bash(node *)", "Bash(npm *)",
+  "Bash(docker compose *)", "Bash(docker info *)", "Bash(docker desktop start *)",
+  "Bash(git status *)", "Bash(git diff *)", "Bash(ls *)", "Bash(cat *)", "Bash(grep *)", "Bash(curl -s http://localhost:*)",
+]
+disallowed_tools = ["Bash(git push *)", "Bash(rm -rf *)", "WebFetch"]
+
+[agents.echo]
+name = "Echo (kiểm tra hệ thống)"
+role = "Agent giả để thử worker"
+adapter = "shell"
+workdir = "."
+[agents.echo.shell]
+command = ["python", "-c", "import sys; print(sys.stdin.read()[:200]); print('AOS_RESULT: done - echo ok')"]
